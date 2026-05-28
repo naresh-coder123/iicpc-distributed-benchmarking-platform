@@ -1,0 +1,158 @@
+name: iicpc-full
+
+# Full local development stack — infrastructure + all Go services + UI.
+# Usage:
+#   docker compose -f deploy/phase4/docker-compose.full.yml up --build
+#
+# All Go services are built from the repo root using their phase5 Dockerfiles.
+# The UI is built from frontend/leaderboard-ui.
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  redpanda:
+    image: redpandadata/redpanda:v24.3.8
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - "1G"
+      - --reserve-memory
+      - "0M"
+      - --node-id
+      - "0"
+      - --check=false
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:9092
+      - --pandaproxy-addr
+      - 0.0.0.0:8082
+      - --advertise-pandaproxy-addr
+      - redpanda:8082
+    ports:
+      - "9092:9092"
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  redis:
+    image: redis:7.4
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  timescaledb:
+    image: timescale/timescaledb:2.15.3-pg16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: iicpc
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./timescaledb-init:/docker-entrypoint-initdb.d:ro
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Application services ────────────────────────────────────────────────────
+
+  mock-matcher:
+    build:
+      context: ../..
+      dockerfile: deploy/phase5/images/mock_matcher_go/Dockerfile
+    image: iicpc/mock-matcher-go:latest
+    ports:
+      - "50051:50051"
+    restart: unless-stopped
+
+  telemetry-ingester:
+    build:
+      context: ../..
+      dockerfile: deploy/phase5/images/telemetry_ingester/Dockerfile
+    image: iicpc/telemetry-ingester:latest
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_TOPIC: metrics
+      REDIS_ADDR: redis:6379
+      PG_URL: postgres://postgres:postgres@timescaledb:5432/iicpc?sslmode=disable
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  leaderboard-api:
+    build:
+      context: ../..
+      dockerfile: deploy/phase5/images/leaderboard_api/Dockerfile
+    image: iicpc/leaderboard-api:latest
+    environment:
+      REDIS_ADDR: redis:6379
+      PG_URL: postgres://postgres:postgres@timescaledb:5432/iicpc?sslmode=disable
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  judge-api:
+    build:
+      context: ../..
+      dockerfile: deploy/phase5/images/judge_api/Dockerfile
+    image: iicpc/judge-api:latest
+    environment:
+      REDIS_ADDR: redis:6379
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_TOPIC: metrics
+    ports:
+      - "8081:8081"
+    volumes:
+      # Mount Docker socket so the judge can launch sandbox containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+
+  leaderboard-ui:
+    build:
+      context: ../../frontend/leaderboard-ui
+      dockerfile: Dockerfile
+    image: iicpc/leaderboard-ui:latest
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:8080
+      NEXT_PUBLIC_JUDGE_BASE: http://localhost:8081
+    ports:
+      - "3000:3000"
+    depends_on:
+      - leaderboard-api
+      - judge-api
+    restart: unless-stopped
+
+volumes:
+  timescaledb_data:

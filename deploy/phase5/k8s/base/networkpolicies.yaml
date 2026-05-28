@@ -1,0 +1,362 @@
+###############################################################################
+# iicpc-telemetry namespace
+###############################################################################
+
+# Default: deny all ingress and egress in iicpc-telemetry, then open selectively.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: iicpc-telemetry
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Redpanda: accept Kafka (9092) from telemetry-ingester and bot-fleet (iicpc-runner),
+# accept PandaProxy (8082) from within iicpc-telemetry only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redpanda
+  namespace: iicpc-telemetry
+spec:
+  podSelector:
+    matchLabels:
+      app: redpanda
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Kafka from telemetry-ingester (same namespace)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: telemetry-ingester
+      ports:
+        - port: 9092
+    # Kafka from bot-fleet in iicpc-runner namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-runner
+          podSelector:
+            matchLabels:
+              app: bot-fleet
+      ports:
+        - port: 9092
+  egress:
+    # Allow DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Redis: accept from telemetry-ingester and leaderboard-api (iicpc-frontend).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis
+  namespace: iicpc-telemetry
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: telemetry-ingester
+      ports:
+        - port: 6379
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-frontend
+          podSelector:
+            matchLabels:
+              app: leaderboard-api
+      ports:
+        - port: 6379
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# TimescaleDB: accept only from telemetry-ingester.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-timescaledb
+  namespace: iicpc-telemetry
+spec:
+  podSelector:
+    matchLabels:
+      app: timescaledb
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: telemetry-ingester
+      ports:
+        - port: 5432
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Telemetry-ingester: can reach Redpanda, Redis, TimescaleDB.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-telemetry-ingester
+  namespace: iicpc-telemetry
+spec:
+  podSelector:
+    matchLabels:
+      app: telemetry-ingester
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redpanda
+      ports:
+        - port: 9092
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app: timescaledb
+      ports:
+        - port: 5432
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+###############################################################################
+# iicpc-runner namespace
+###############################################################################
+
+# Default deny all in runner namespace.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: iicpc-runner
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Mock-matcher: accept gRPC (50051) from bot-fleet only. No egress to internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mock-matcher
+  namespace: iicpc-runner
+spec:
+  podSelector:
+    matchLabels:
+      app: mock-matcher
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: bot-fleet
+      ports:
+        - port: 50051
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Bot-fleet Job: can reach mock-matcher (gRPC) and Redpanda (Kafka).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-bot-fleet
+  namespace: iicpc-runner
+spec:
+  podSelector:
+    matchLabels:
+      app: bot-fleet
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    # gRPC to mock-matcher in same namespace
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mock-matcher
+      ports:
+        - port: 50051
+    # Kafka to Redpanda in iicpc-telemetry
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-telemetry
+          podSelector:
+            matchLabels:
+              app: redpanda
+      ports:
+        - port: 9092
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+###############################################################################
+# iicpc-frontend namespace
+###############################################################################
+
+# Default deny all in frontend namespace.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: iicpc-frontend
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Leaderboard-API: accept HTTP from anywhere (NodePort), egress to Redis only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-leaderboard-api
+  namespace: iicpc-frontend
+spec:
+  podSelector:
+    matchLabels:
+      app: leaderboard-api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-telemetry
+          podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Leaderboard-UI: accept HTTP from anywhere (NodePort), no backend egress needed
+# (Next.js SSR calls the API from the browser, not server-side in this setup).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-leaderboard-ui
+  namespace: iicpc-frontend
+spec:
+  podSelector:
+    matchLabels:
+      app: leaderboard-ui
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: 3000
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# Judge-API: accept HTTP from anywhere (NodePort 30081), egress to Redis,
+# Redpanda, and the Docker socket (host network — not a pod-to-pod rule).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-judge-api
+  namespace: iicpc-runner
+spec:
+  podSelector:
+    matchLabels:
+      app: judge-api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: 8081
+  egress:
+    # Redis in iicpc-telemetry
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-telemetry
+          podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+    # Redpanda in iicpc-telemetry
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-telemetry
+          podSelector:
+            matchLabels:
+              app: redpanda
+      ports:
+        - port: 9092
+    # gRPC to contestant sandbox containers (host-bound on 50052)
+    # These run on the host network so we allow all egress on that port.
+    - ports:
+        - port: 50052
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

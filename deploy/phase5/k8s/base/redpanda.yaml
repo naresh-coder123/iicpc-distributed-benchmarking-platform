@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  namespace: iicpc-telemetry
+spec:
+  selector:
+    app: redpanda
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: 9092
+    - name: pandaproxy
+      port: 8082
+      targetPort: 8082
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redpanda
+  namespace: iicpc-telemetry
+spec:
+  serviceName: redpanda
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redpanda
+  template:
+    metadata:
+      labels:
+        app: redpanda
+    spec:
+      containers:
+        - name: redpanda
+          image: redpandadata/redpanda:v24.3.8
+          args:
+            - redpanda
+            - start
+            - --overprovisioned
+            - --smp
+            - "1"
+            - --memory
+            - "1G"
+            - --reserve-memory
+            - "0M"
+            - --node-id
+            - "0"
+            - --check=false
+            - --kafka-addr
+            - PLAINTEXT://0.0.0.0:9092
+            - --advertise-kafka-addr
+            - PLAINTEXT://redpanda.iicpc-telemetry.svc.cluster.local:9092
+            - --pandaproxy-addr
+            - 0.0.0.0:8082
+            - --advertise-pandaproxy-addr
+            - redpanda.iicpc-telemetry.svc.cluster.local:8082
+          ports:
+            - containerPort: 9092
+            - containerPort: 8082
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/redpanda/data
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+

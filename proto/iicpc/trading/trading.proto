@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package iicpc.trading;
+
+// NOTE: In Phase 1 we keep the contract small and stable.
+// Additional fields/services can be added in later phases.
+option go_package = "github.com/iicpc/platform/gen/go/iicpc/trading;trading";
+
+enum OrderType {
+  LIMIT = 0;
+  MARKET = 1;
+}
+
+enum Side {
+  BUY = 0;
+  SELL = 1;
+}
+
+message OrderRequest {
+  string order_id = 1;
+  string client_id = 2;
+  string symbol = 3;
+  Side side = 4;
+  OrderType order_type = 5;
+  double price = 6; // Used if LIMIT
+  uint64 quantity = 7;
+  uint64 timestamp_ns = 8; // Sent timestamp (UTC Epoch ns)
+}
+
+message OrderResponse {
+  string order_id = 1;
+  string client_id = 2;
+  string symbol = 3;
+  string status = 4; // REJECTED, FILLED, PARTIALLY_FILLED, CANCELLED
+  double execution_price = 5;
+  uint64 filled_quantity = 6;
+  uint64 timestamp_ns = 7; // Matching engine process timestamp
+}
+
+// Minimal gateway contract for the Mock Matcher (Phase 1).
+service TradingGateway {
+  // Unary request/response (easy for early testing).
+  rpc PlaceOrder(OrderRequest) returns (OrderResponse);
+
+  // Bidirectional streaming (kept for Phase 2+ bots; not required for Phase 1 mock).
+  rpc StreamOrders(stream OrderRequest) returns (stream OrderResponse);
+}

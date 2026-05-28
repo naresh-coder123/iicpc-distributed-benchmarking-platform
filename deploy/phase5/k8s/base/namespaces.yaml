@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: iicpc-telemetry
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: iicpc-runner
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: iicpc-frontend
+

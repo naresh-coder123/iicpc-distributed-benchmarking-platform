@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-ingester
+  namespace: iicpc-telemetry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telemetry-ingester
+  template:
+    metadata:
+      labels:
+        app: telemetry-ingester
+    spec:
+      containers:
+        - name: telemetry-ingester
+          image: iicpc/telemetry-ingester:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --kafka
+            - redpanda.iicpc-telemetry.svc.cluster.local:9092
+            - --topic
+            - metrics
+            - --redis
+            - redis.iicpc-telemetry.svc.cluster.local:6379
+          env:
+            - name: PG_URL
+              valueFrom:
+                secretKeyRef:
+                  name: timescaledb-credentials
+                  key: PG_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+

@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-matcher
+  namespace: iicpc-runner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-matcher
+  template:
+    metadata:
+      labels:
+        app: mock-matcher
+    spec:
+      containers:
+        - name: mock-matcher
+          image: iicpc/mock-matcher-go:latest
+          imagePullPolicy: IfNotPresent
+          args: ["--addr", "0.0.0.0:50051"]
+          ports:
+            - containerPort: 50051
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-matcher
+  namespace: iicpc-runner
+spec:
+  selector:
+    app: mock-matcher
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+

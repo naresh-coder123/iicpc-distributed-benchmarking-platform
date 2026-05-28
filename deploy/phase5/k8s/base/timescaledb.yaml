@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: timescaledb-init
+  namespace: iicpc-telemetry
+data:
+  001_init.sql: |
+    CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+    CREATE TABLE IF NOT EXISTS metric_records (
+      time            TIMESTAMPTZ NOT NULL,
+      test_run_id     TEXT NOT NULL,
+      contestant_id   TEXT NOT NULL,
+      client_id       TEXT NOT NULL,
+      order_id        TEXT NOT NULL,
+      sent_time_ns    BIGINT NOT NULL,
+      recv_time_ns    BIGINT NOT NULL,
+      engine_time_ns  BIGINT NOT NULL,
+      is_correct      BOOLEAN NOT NULL,
+      error_code      TEXT NOT NULL,
+      latency_ns      BIGINT NOT NULL
+    );
+
+    SELECT create_hypertable('metric_records', by_range('time'), if_not_exists => TRUE);
+
+    CREATE INDEX IF NOT EXISTS metric_records_contestant_time_idx
+      ON metric_records (contestant_id, time DESC);
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: timescaledb
+  namespace: iicpc-telemetry
+spec:
+  selector:
+    app: timescaledb
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: timescaledb
+  namespace: iicpc-telemetry
+spec:
+  serviceName: timescaledb
+  replicas: 1
+  selector:
+    matchLabels:
+      app: timescaledb
+  template:
+    metadata:
+      labels:
+        app: timescaledb
+    spec:
+      containers:
+        - name: timescaledb
+          image: timescale/timescaledb:2.15.3-pg16
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: timescaledb-credentials
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: timescaledb-credentials
+                  key: POSTGRES_USER
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: timescaledb-credentials
+                  key: POSTGRES_DB
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: init
+          configMap:
+            name: timescaledb-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+

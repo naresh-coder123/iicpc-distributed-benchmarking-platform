@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Namespaces first — everything else depends on them.
+  - namespaces.yaml
+  # Secrets — must exist before Deployments/StatefulSets that reference them.
+  - secrets.yaml
+  # Infrastructure services.
+  - redpanda.yaml
+  - redis.yaml
+  - timescaledb.yaml
+  # Application services.
+  - mock-matcher.yaml
+  - judge-api.yaml
+  - telemetry-ingester.yaml
+  - leaderboard-api.yaml
+  - leaderboard-ui.yaml
+  # Network isolation.
+  - networkpolicies.yaml
+  # Availability and autoscaling.
+  - poddisruptionbudgets.yaml
+  - hpa.yaml
+  # Bot-fleet Job (run on demand; not started automatically by apply).
+  # To trigger: kubectl apply -f bot-fleet-job.yaml -n iicpc-runner
+  # or use deploy/phase5/scripts/06_run_botfleet.ps1
+

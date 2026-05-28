@@ -1,0 +1,43 @@
+# ── Go ────────────────────────────────────────────────────────────────────────
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# ── Generated protobuf (regenerate with tools/gen_protos*.py) ─────────────────
+gen/go/
+pkg/iicpc/trading/trading_pb2*.py
+pkg/iicpc/telemetry/telemetry_pb2*.py
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+*.egg-info/
+dist/
+.eggs/
+
+# ── Node / Next.js ────────────────────────────────────────────────────────────
+frontend/leaderboard-ui/node_modules/
+frontend/leaderboard-ui/.next/
+frontend/leaderboard-ui/out/
+
+# ── Environment ───────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Docker / uploads ──────────────────────────────────────────────────────────
+.uploads/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo

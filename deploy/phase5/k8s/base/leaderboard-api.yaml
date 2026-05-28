@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaderboard-api
+  namespace: iicpc-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: leaderboard-api
+  template:
+    metadata:
+      labels:
+        app: leaderboard-api
+    spec:
+      containers:
+        - name: leaderboard-api
+          image: iicpc/leaderboard-api:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --addr
+            - :8080
+            - --redis
+            - redis.iicpc-telemetry.svc.cluster.local:6379
+          env:
+            - name: PG_URL
+              valueFrom:
+                secretKeyRef:
+                  name: timescaledb-credentials
+                  key: PG_URL
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: leaderboard-api
+  namespace: iicpc-frontend
+spec:
+  type: NodePort
+  selector:
+    app: leaderboard-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080
+

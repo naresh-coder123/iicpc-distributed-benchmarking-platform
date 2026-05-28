@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package iicpc.telemetry;
+
+option go_package = "github.com/iicpc/platform/gen/go/iicpc/telemetry;telemetry";
+
+message MetricRecord {
+  string test_run_id = 1;
+  string contestant_id = 2;
+  string client_id = 3;
+  string order_id = 4;
+  uint64 sent_time_ns = 5;
+  uint64 recv_time_ns = 6;
+  uint64 engine_time_ns = 7;
+  bool is_correct = 8; // Calculated correctness of match
+  string error_code = 9; // E.g., PRICE_TIME_VIOLATION, BAD_FILL
+}

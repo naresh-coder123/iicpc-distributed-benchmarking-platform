@@ -1,0 +1,103 @@
+# PodDisruptionBudgets ensure at least one replica of each critical service
+# remains available during voluntary disruptions (node drains, rolling updates).
+#
+# StatefulSets (Redpanda, TimescaleDB) are single-replica in this setup,
+# so their PDBs use maxUnavailable: 0 to block voluntary eviction entirely —
+# protecting data integrity during node maintenance.
+---
+# Redpanda — single-node Kafka; must not be evicted during a drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redpanda-pdb
+  namespace: iicpc-telemetry
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: redpanda
+---
+# TimescaleDB — single-node Postgres; must not be evicted during a drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: timescaledb-pdb
+  namespace: iicpc-telemetry
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: timescaledb
+---
+# Redis — single replica; protect from simultaneous eviction.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-pdb
+  namespace: iicpc-telemetry
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: redis
+---
+# Telemetry-ingester — allow rolling updates (1 unavailable at a time).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: telemetry-ingester-pdb
+  namespace: iicpc-telemetry
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: telemetry-ingester
+---
+# Leaderboard-API — allow rolling updates.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: leaderboard-api-pdb
+  namespace: iicpc-frontend
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: leaderboard-api
+---
+# Leaderboard-UI — allow rolling updates.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: leaderboard-ui-pdb
+  namespace: iicpc-frontend
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: leaderboard-ui
+---
+# Mock-matcher — allow rolling updates.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mock-matcher-pdb
+  namespace: iicpc-runner
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: mock-matcher
+
+---
+# Judge-API — allow rolling updates.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: judge-api-pdb
+  namespace: iicpc-runner
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: judge-api

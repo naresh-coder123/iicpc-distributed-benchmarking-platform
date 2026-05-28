@@ -1,0 +1,56 @@
+# Bot-fleet is run as a Kubernetes Job (not a long-lived Deployment).
+# It completes once the configured --duration elapses, then the Job succeeds.
+#
+# To re-run: delete the old Job and re-apply, or use the helper script
+#   deploy/phase5/scripts/06_run_botfleet.ps1
+#
+# Tune --bots, --ops, --duration, --contestant-id, and --run-id via the args
+# array below, or override them in a kustomize patch.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bot-fleet
+  namespace: iicpc-runner
+  labels:
+    app: bot-fleet
+spec:
+  # Do not restart on failure — surface errors clearly.
+  backoffLimit: 0
+  # Clean up completed/failed pods after 10 minutes so they don't clutter the cluster.
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: bot-fleet
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bot-fleet
+          image: iicpc/bot-fleet:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --target
+            - mock-matcher.iicpc-runner.svc.cluster.local:50051
+            - --bots
+            - "50"
+            - --ops
+            - "200"
+            - --duration
+            - "60"
+            - --run-id
+            - "phase5-run-1"
+            - --contestant-id
+            - "mock-matcher"
+            - --symbol
+            - "AAPL"
+            - --kafka
+            - redpanda.iicpc-telemetry.svc.cluster.local:9092
+            - --kafka-topic
+            - metrics
+          resources:
+            requests:
+              cpu: 200m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
