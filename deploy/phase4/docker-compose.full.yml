@@ -1,11 +1,9 @@
 name: iicpc-full
 
-# Full local development stack — infrastructure + all Go services + UI.
+# Core backend infrastructure + application microservices.
+# Next.js frontend has been decoupled and runs natively on Windows to maximize resource allocation.
 # Usage:
-#   docker compose -f deploy/phase4/docker-compose.full.yml up --build
-#
-# All Go services are built from the repo root using their phase5 Dockerfiles.
-# The UI is built from frontend/leaderboard-ui.
+#   docker compose -f deploy/phase4/docker-compose.full.yml up -d
 
 services:
 
@@ -127,31 +125,19 @@ services:
       REDIS_ADDR: redis:6379
       KAFKA_BROKERS: redpanda:9092
       KAFKA_TOPIC: metrics
+      PG_URL: postgres://postgres:postgres@timescaledb:5432/iicpc?sslmode=disable
     ports:
       - "8081:8081"
     volumes:
-      # Mount Docker socket so the judge can launch sandbox containers.
+      # Mount Windows Host Docker engine control pipeline
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       redis:
         condition: service_healthy
       redpanda:
         condition: service_healthy
-    restart: unless-stopped
-
-  leaderboard-ui:
-    build:
-      context: ../../frontend/leaderboard-ui
-      dockerfile: Dockerfile
-    image: iicpc/leaderboard-ui:latest
-    environment:
-      NEXT_PUBLIC_API_BASE: http://localhost:8080
-      NEXT_PUBLIC_JUDGE_BASE: http://localhost:8081
-    ports:
-      - "3000:3000"
-    depends_on:
-      - leaderboard-api
-      - judge-api
+      timescaledb:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

@@ -1,0 +1,49 @@
+# Git files and metadata
+.git
+.github
+.gitignore
+.env*
+
+# Local executables and binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+# Dependency directories
+**/node_modules/
+**/bower_components/
+
+# Local UI/Frontend build directories
+frontend/leaderboard-ui/.next/
+frontend/leaderboard-ui/out/
+frontend/leaderboard-ui/build/
+
+# Go build caches, binaries, and test output
+**/go-build/
+**/vendor/
+*.test
+*.out
+*.prof
+
+# Python virtual envs and caches
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.venv/
+env/
+venv/
+ENV/
+
+# Temporary and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.gemini/

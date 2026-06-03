@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 
 	tradingpb "github.com/iicpc/platform/gen/go/iicpc/trading"
@@ -385,15 +386,8 @@ func percentiles(data []uint64) (p50, p90, p99 uint64) {
 	}
 	sorted := make([]uint64, n)
 	copy(sorted, data)
-	for i := 1; i < n; i++ {
-		key := sorted[i]
-		j := i - 1
-		for j >= 0 && sorted[j] > key {
-			sorted[j+1] = sorted[j]
-			j--
-		}
-		sorted[j+1] = key
-	}
+	// O(n log n) sort — replaces O(n²) insertion sort for large run datasets.
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 	idx := func(pct float64) uint64 {
 		return sorted[int(float64(n-1)*pct/100.0)]
 	}

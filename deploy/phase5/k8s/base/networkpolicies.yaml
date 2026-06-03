@@ -255,7 +255,7 @@ spec:
     - Ingress
     - Egress
 ---
-# Leaderboard-API: accept HTTP from anywhere (NodePort), egress to Redis only.
+# Leaderboard-API: accept HTTP from anywhere (NodePort), egress to Redis and TimescaleDB.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -281,6 +281,16 @@ spec:
               app: redis
       ports:
         - port: 6379
+    # TimescaleDB — needed for /contestants/{id}/history and /runs/{id}/stats
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-telemetry
+          podSelector:
+            matchLabels:
+              app: timescaledb
+      ports:
+        - port: 5432
     - ports:
         - port: 53
           protocol: UDP
