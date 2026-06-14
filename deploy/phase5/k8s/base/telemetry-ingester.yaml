@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: telemetry-ingester
-          image: iicpc/telemetry-ingester:latest
+          image: iicpcregistery.azurecr.io/telemetry-ingester:latest
           imagePullPolicy: IfNotPresent
           args:
             - --kafka

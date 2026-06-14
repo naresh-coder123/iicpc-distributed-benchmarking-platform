@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	telemetrypb "github.com/iicpc/platform/gen/go/iicpc/telemetry"
@@ -18,6 +20,9 @@ func NewTimescale(pool *pgxpool.Pool) *Timescale {
 }
 
 // InsertBatch writes a batch of raw metric records to the hypertable.
+// It drains ALL queued results even if individual rows fail, collecting
+// errors and returning them as a single combined error at the end.
+// This ensures partial batches are not silently dropped.
 func (t *Timescale) InsertBatch(ctx context.Context, recs []*telemetrypb.MetricRecord) error {
 	if len(recs) == 0 {
 		return nil
@@ -34,7 +39,8 @@ func (t *Timescale) InsertBatch(ctx context.Context, recs []*telemetrypb.MetricR
 			`INSERT INTO metric_records
 			 (time, test_run_id, contestant_id, client_id, order_id,
 			  sent_time_ns, recv_time_ns, engine_time_ns, is_correct, error_code, latency_ns)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			 ON CONFLICT DO NOTHING`,
 			now,
 			r.GetTestRunId(),
 			r.GetContestantId(),
@@ -51,12 +57,17 @@ func (t *Timescale) InsertBatch(ctx context.Context, recs []*telemetrypb.MetricR
 
 	br := t.pool.SendBatch(ctx, b)
 	defer br.Close()
-	for range recs {
+
+	// Drain ALL results. Collect errors without short-circuiting so that
+	// successful rows in the batch are still committed by the server.
+	var errs []error
+	for i := range recs {
 		if _, err := br.Exec(); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("record[%d] (run=%s order=%s): %w",
+				i, recs[i].GetTestRunId(), recs[i].GetOrderId(), err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // ContestantStats holds aggregated per-window stats for one contestant.

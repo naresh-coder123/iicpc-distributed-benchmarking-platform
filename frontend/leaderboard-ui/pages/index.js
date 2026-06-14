@@ -4,12 +4,28 @@ import Head from 'next/head';
 // ── API base URLs (client-only to avoid SSR hydration mismatch) ──────────────
 function resolveLeaderboardBase() {
   if (process.env.NEXT_PUBLIC_API_BASE) return process.env.NEXT_PUBLIC_API_BASE;
-  return `http://${window.location.hostname}:30080`;
+
+  // 🚀 DYNAMIC FIX: If no env variable exists, look at the address bar.
+  // In production AKS, your leaderboard-api runs on port 8080.
+  if (typeof window !== "undefined") {
+    return `http://${window.location.hostname}:8080`;
+  }
+  return "";
 }
+
 function resolveJudgeBase() {
   if (process.env.NEXT_PUBLIC_JUDGE_BASE) return process.env.NEXT_PUBLIC_JUDGE_BASE;
-  return `http://${window.location.hostname}:30081`;
+
+  // Route seamlessly through your API gateway proxy on port 8080
+  const apiBase = resolveLeaderboardBase();
+  if (apiBase) return `${apiBase}/proxy/judge`;
+
+  if (typeof window !== "undefined") {
+    return `http://${window.location.hostname}:8080/proxy/judge`;
+  }
+  return "";
 }
+
 function useApiBases() {
   const [bases, setBases] = useState(null);
   useEffect(() => {
@@ -17,7 +33,6 @@ function useApiBases() {
   }, []);
   return bases;
 }
-
 // ── Error Boundary ────────────────────────────────────────────────────────────
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { hasError: false, error: null }; }
@@ -61,14 +76,14 @@ function statusBadge(s) {
   return <span className={`badge ${map[s] || 'badge-queued'}`}>{s || '—'}</span>;
 }
 
-const PALETTE = ['#38bdf8','#818cf8','#34d399','#fbbf24','#fb7185','#a78bfa'];
+const PALETTE = ['#38bdf8', '#818cf8', '#34d399', '#fbbf24', '#fb7185', '#a78bfa'];
 const TABS = [
-  { id: 'Dashboard',    icon: '⚡', label: 'Dashboard'   },
-  { id: 'Leaderboard', icon: '🏆', label: 'Leaderboard'  },
-  { id: 'Submit',      icon: '🚀', label: 'Submit'       },
-  { id: 'My Runs',     icon: '📊', label: 'My Runs'      },
-  { id: 'History',     icon: '📈', label: 'History'      },
-  { id: 'Contestants', icon: '👥', label: 'Contestants'  },
+  { id: 'Dashboard', icon: '⚡', label: 'Dashboard' },
+  { id: 'Leaderboard', icon: '🏆', label: 'Leaderboard' },
+  { id: 'Submit', icon: '🚀', label: 'Submit' },
+  { id: 'My Runs', icon: '📊', label: 'My Runs' },
+  { id: 'History', icon: '📈', label: 'History' },
+  { id: 'Contestants', icon: '👥', label: 'Contestants' },
 ];
 
 // ── Root Page ─────────────────────────────────────────────────────────────────
@@ -129,11 +144,11 @@ export default function Home() {
         ) : (
           <ErrorBoundary>
             <div className="tab-content" key={tab}>
-              {tab === 'Dashboard'   && <DashboardTab   lBase={bases.lBase} jBase={bases.jBase} />}
+              {tab === 'Dashboard' && <DashboardTab lBase={bases.lBase} jBase={bases.jBase} />}
               {tab === 'Leaderboard' && <LeaderboardTab lBase={bases.lBase} />}
-              {tab === 'Submit'      && <SubmitTab      jBase={bases.jBase} />}
-              {tab === 'My Runs'     && <MyRunsTab      jBase={bases.jBase} />}
-              {tab === 'History'     && <HistoryTab     lBase={bases.lBase} />}
+              {tab === 'Submit' && <SubmitTab jBase={bases.jBase} />}
+              {tab === 'My Runs' && <MyRunsTab jBase={bases.jBase} />}
+              {tab === 'History' && <HistoryTab lBase={bases.lBase} />}
               {tab === 'Contestants' && <ContestantsTab jBase={bases.jBase} />}
             </div>
           </ErrorBoundary>
@@ -145,13 +160,13 @@ export default function Home() {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 function DashboardTab({ lBase, jBase }) {
-  const [rows, setRows]         = useState([]);
+  const [rows, setRows] = useState([]);
   const [queueStatus, setQueue] = useState(null);
-  const [logs, setLogs]         = useState([]);
-  const [tpsHistory, setTps]    = useState([]);
-  const [latHistory, setLat]    = useState([]);
-  const logsRef                 = useRef(null);
-  const prevRowsRef             = useRef({});
+  const [logs, setLogs] = useState([]);
+  const [tpsHistory, setTps] = useState([]);
+  const [latHistory, setLat] = useState([]);
+  const logsRef = useRef(null);
+  const prevRowsRef = useRef({});
 
   const addLog = useCallback((msg, level = 'info') => {
     const ts = new Date().toLocaleTimeString();
@@ -170,7 +185,7 @@ function DashboardTab({ lBase, jBase }) {
           const prev = prevRowsRef.current[r.contestant_id];
           const score = Number(r.score || 0).toFixed(1);
           if (prev !== score) {
-            addLog(`Score update: ${r.contestant_id} → ${score} (p99=${r.p99_us}µs, correct=${(Number(r.correct_ratio||0)*100).toFixed(1)}%)`, 'score');
+            addLog(`Score update: ${r.contestant_id} → ${score} (p99=${r.p99_us}µs, correct=${(Number(r.correct_ratio || 0) * 100).toFixed(1)}%)`, 'score');
             prevRowsRef.current[r.contestant_id] = score;
           }
           const t = Date.now();
@@ -208,7 +223,7 @@ function DashboardTab({ lBase, jBase }) {
         <div className="grid-4 mb-16" style={{ marginBottom: 20 }}>
           <div className="card">
             <div className="stat-label">Top Score</div>
-            <div className="stat-value">{Number(rows[0]?.score||0).toFixed(1)}</div>
+            <div className="stat-value">{Number(rows[0]?.score || 0).toFixed(1)}</div>
             <div className="stat-sub">{rows[0]?.contestant_id}</div>
           </div>
           <div className="card">
@@ -223,7 +238,7 @@ function DashboardTab({ lBase, jBase }) {
           </div>
           <div className="card">
             <div className="stat-label">Top TPS</div>
-            <div className="stat-value">{Number(rows[0]?.sustained_tps||0).toFixed(0)}</div>
+            <div className="stat-value">{Number(rows[0]?.sustained_tps || 0).toFixed(0)}</div>
             <div className="stat-sub">sustained orders/s</div>
           </div>
         </div>
@@ -261,9 +276,9 @@ function DashboardTab({ lBase, jBase }) {
               <div style={{ marginTop: 14 }}>
                 {rows.slice(0, 5).map((r, i) => (
                   <div key={r.contestant_id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: PALETTE[i % PALETTE.length], display: 'inline-block', boxShadow: `0 0 6px ${PALETTE[i%PALETTE.length]}66` }} />
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: PALETTE[i % PALETTE.length], display: 'inline-block', boxShadow: `0 0 6px ${PALETTE[i % PALETTE.length]}66` }} />
                     <span style={{ fontSize: '0.8125rem', flex: 1, color: 'var(--text-secondary)' }}>{r.contestant_id}</span>
-                    <span style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>{Number(r.score||0).toFixed(1)}</span>
+                    <span style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>{Number(r.score || 0).toFixed(1)}</span>
                   </div>
                 ))}
               </div>
@@ -292,11 +307,11 @@ function DashboardTab({ lBase, jBase }) {
           {logs.length === 0
             ? <span className="log-empty">Waiting for events…</span>
             : logs.map((l, i) => (
-                <div key={i} className="log-entry">
-                  <span className="log-timestamp">[{l.ts}]</span>
-                  <span style={{ color: l.level === 'error' ? 'var(--accent-rose)' : l.level === 'warn' ? 'var(--accent-amber)' : l.level === 'score' ? 'var(--accent-emerald)' : l.level === 'sse' ? 'var(--accent-violet)' : undefined }}>{l.msg}</span>
-                </div>
-              ))}
+              <div key={i} className="log-entry">
+                <span className="log-timestamp">[{l.ts}]</span>
+                <span style={{ color: l.level === 'error' ? 'var(--accent-rose)' : l.level === 'warn' ? 'var(--accent-amber)' : l.level === 'score' ? 'var(--accent-emerald)' : l.level === 'sse' ? 'var(--accent-violet)' : undefined }}>{l.msg}</span>
+              </div>
+            ))}
         </div>
       </div>
     </section>
@@ -358,10 +373,10 @@ function Sparkline({ data, contestants, colors, valueKey }) {
 
 // ── Score breakdown ───────────────────────────────────────────────────────────
 function ScoreBreakdown({ row }) {
-  const sL     = Number(row.score_latency     || 0);
-  const sT     = Number(row.score_throughput  || 0);
-  const sC     = Number(row.score_correctness || 0);
-  const total  = Number(row.score || 0);
+  const sL = Number(row.score_latency || 0);
+  const sT = Number(row.score_throughput || 0);
+  const sC = Number(row.score_correctness || 0);
+  const total = Number(row.score || 0);
   const bar = (v, color) => (
     <div className="progress-bar-track">
       <div className="progress-bar-fill" style={{ width: `${Math.min(100, v).toFixed(1)}%`, background: color }} />
@@ -370,8 +385,8 @@ function ScoreBreakdown({ row }) {
   return (
     <div className="score-breakdown">
       {[
-        { label: 'S_L  latency (40%)',     v: sL, color: 'linear-gradient(90deg,#38bdf8,#818cf8)' },
-        { label: 'S_T  throughput (30%)',  v: sT, color: 'linear-gradient(90deg,#34d399,#38bdf8)' },
+        { label: 'S_L  latency (40%)', v: sL, color: 'linear-gradient(90deg,#38bdf8,#818cf8)' },
+        { label: 'S_T  throughput (30%)', v: sT, color: 'linear-gradient(90deg,#34d399,#38bdf8)' },
         { label: 'S_C  correctness (30%)', v: sC, color: 'linear-gradient(90deg,#fbbf24,#f97316)' },
       ].map(({ label, v, color }) => (
         <div className="score-row" key={label}>
@@ -391,10 +406,10 @@ function ScoreBreakdown({ row }) {
 
 // ── Leaderboard ───────────────────────────────────────────────────────────────
 function LeaderboardTab({ lBase }) {
-  const [rows, setRows]       = useState([]);
-  const [err, setErr]         = useState('');
+  const [rows, setRows] = useState([]);
+  const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
-  const timerRef              = useRef(null);
+  const timerRef = useRef(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -417,7 +432,7 @@ function LeaderboardTab({ lBase }) {
     return () => { es.close(); if (timerRef.current) clearTimeout(timerRef.current); };
   }, [lBase, refresh]);
 
-  const COLS = ['Rank','Contestant','Orders','TPS','Correct%','p50µs','p90µs','p99µs','S_L','S_T','S_C','Score'];
+  const COLS = ['Rank', 'Contestant', 'Orders', 'TPS', 'Correct%', 'p50µs', 'p90µs', 'p99µs', 'S_L', 'S_T', 'S_C', 'Score'];
 
   return (
     <section>
@@ -437,10 +452,10 @@ function LeaderboardTab({ lBase }) {
           <tbody>
             {rows.map((r, i) => (
               <tr key={r.contestant_id || i}>
-                <td className={`rank-col${i === 0 ? ' rank-1' : i === 1 ? ' rank-2' : i === 2 ? ' rank-3' : ''}`}>{i+1}</td>
+                <td className={`rank-col${i === 0 ? ' rank-1' : i === 1 ? ' rank-2' : i === 2 ? ' rank-3' : ''}`}>{i + 1}</td>
                 <td>
                   <div className="contestant-col">
-                    <div className="contestant-avatar" style={{ background: `linear-gradient(135deg, ${PALETTE[i % PALETTE.length]}, ${PALETTE[(i+2) % PALETTE.length]})` }}>
+                    <div className="contestant-avatar" style={{ background: `linear-gradient(135deg, ${PALETTE[i % PALETTE.length]}, ${PALETTE[(i + 2) % PALETTE.length]})` }}>
                       {(r.contestant_id || '?').slice(0, 2).toUpperCase()}
                     </div>
                     <span className="text-mono text-sm">{r.contestant_id}</span>
@@ -454,8 +469,8 @@ function LeaderboardTab({ lBase }) {
                 <td className="text-mono text-sm">{r.p50_us}</td>
                 <td className="text-mono text-sm">{r.p90_us}</td>
                 <td className="text-mono text-sm">{r.p99_us}</td>
-                <td>{Number(r.score_latency     || 0).toFixed(1)}</td>
-                <td>{Number(r.score_throughput  || 0).toFixed(1)}</td>
+                <td>{Number(r.score_latency || 0).toFixed(1)}</td>
+                <td>{Number(r.score_throughput || 0).toFixed(1)}</td>
                 <td>{Number(r.score_correctness || 0).toFixed(1)}</td>
                 <td className="score-col">{Number(r.score || 0).toFixed(1)}</td>
               </tr>
@@ -477,10 +492,10 @@ function LeaderboardTab({ lBase }) {
 // ── Submit ────────────────────────────────────────────────────────────────────
 function SubmitTab({ jBase }) {
   const [contestantId, setContestantId] = useState('');
-  const [imageTag, setImageTag]         = useState('');
-  const [result, setResult]             = useState(null);
-  const [err, setErr]                   = useState('');
-  const [loading, setLoading]           = useState(false);
+  const [imageTag, setImageTag] = useState('');
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(false);
 
   async function submit(e) {
     e.preventDefault(); setErr(''); setResult(null); setLoading(true);
@@ -541,10 +556,10 @@ function SubmitTab({ jBase }) {
 // ── My Runs ───────────────────────────────────────────────────────────────────
 function MyRunsTab({ jBase }) {
   const [contestantId, setContestantId] = useState('');
-  const [runs, setRuns]                 = useState(null);
-  const [err, setErr]                   = useState('');
-  const [loading, setLoading]           = useState(false);
-  const intervalRef                     = useRef(null);
+  const [runs, setRuns] = useState(null);
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(false);
+  const intervalRef = useRef(null);
 
   const fetchRuns = useCallback(async (id) => {
     if (!id) return; setErr('');
@@ -566,7 +581,7 @@ function MyRunsTab({ jBase }) {
     e.preventDefault(); setLoading(true); await fetchRuns(contestantId); setLoading(false);
   }
 
-  const COLS = ['Run ID','Status','Started','Duration','Orders','Correct%','p50µs','p99µs','Score','Error'];
+  const COLS = ['Run ID', 'Status', 'Started', 'Duration', 'Orders', 'Correct%', 'p50µs', 'p99µs', 'Score', 'Error'];
 
   return (
     <section>
@@ -586,31 +601,31 @@ function MyRunsTab({ jBase }) {
       {runs !== null && (runs.length === 0
         ? <div className="card" style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>No runs found for this contestant.</div>
         : <div className="data-table-wrap">
-            <table className="data-table" aria-label="My Runs">
-              <thead><tr>{COLS.map(h => <th key={h}>{h}</th>)}</tr></thead>
-              <tbody>
-                {runs.map((r) => {
-                  const dur = r.finished_at ? ((new Date(r.finished_at) - new Date(r.started_at)) / 1000).toFixed(1) + 's' : '—';
-                  return (
-                    <tr key={r.run_id}>
-                      <td className="text-mono text-xs" style={{ color: 'var(--text-muted)' }}>{r.run_id?.slice(0, 28)}…</td>
-                      <td>{statusBadge(r.status)}</td>
-                      <td className="text-mono text-xs">{r.started_at ? new Date(r.started_at).toLocaleTimeString() : '—'}</td>
-                      <td>{dur}</td>
-                      <td className="text-bold">{r.total_orders?.toLocaleString() || '—'}</td>
-                      <td style={{ color: r.correct_ratio >= 0.99 ? 'var(--accent-emerald)' : r.correct_ratio >= 0.95 ? 'var(--accent-amber)' : r.correct_ratio != null ? 'var(--accent-rose)' : undefined }}>
-                        {r.correct_ratio != null ? (r.correct_ratio * 100).toFixed(2) + '%' : '—'}
-                      </td>
-                      <td className="text-mono text-xs">{r.p50_us || '—'}</td>
-                      <td className="text-mono text-xs">{r.p99_us || '—'}</td>
-                      <td className="score-col">{r.score != null ? Number(r.score).toFixed(1) : '—'}</td>
-                      <td className="text-xs" style={{ color: 'var(--accent-rose)', maxWidth: 200, wordBreak: 'break-all' }}>{r.error || ''}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <table className="data-table" aria-label="My Runs">
+            <thead><tr>{COLS.map(h => <th key={h}>{h}</th>)}</tr></thead>
+            <tbody>
+              {runs.map((r) => {
+                const dur = r.finished_at ? ((new Date(r.finished_at) - new Date(r.started_at)) / 1000).toFixed(1) + 's' : '—';
+                return (
+                  <tr key={r.run_id}>
+                    <td className="text-mono text-xs" style={{ color: 'var(--text-muted)' }}>{r.run_id?.slice(0, 28)}…</td>
+                    <td>{statusBadge(r.status)}</td>
+                    <td className="text-mono text-xs">{r.started_at ? new Date(r.started_at).toLocaleTimeString() : '—'}</td>
+                    <td>{dur}</td>
+                    <td className="text-bold">{r.total_orders?.toLocaleString() || '—'}</td>
+                    <td style={{ color: r.correct_ratio >= 0.99 ? 'var(--accent-emerald)' : r.correct_ratio >= 0.95 ? 'var(--accent-amber)' : r.correct_ratio != null ? 'var(--accent-rose)' : undefined }}>
+                      {r.correct_ratio != null ? (r.correct_ratio * 100).toFixed(2) + '%' : '—'}
+                    </td>
+                    <td className="text-mono text-xs">{r.p50_us || '—'}</td>
+                    <td className="text-mono text-xs">{r.p99_us || '—'}</td>
+                    <td className="score-col">{r.score != null ? Number(r.score).toFixed(1) : '—'}</td>
+                    <td className="text-xs" style={{ color: 'var(--accent-rose)', maxWidth: 200, wordBreak: 'break-all' }}>{r.error || ''}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );
@@ -619,10 +634,10 @@ function MyRunsTab({ jBase }) {
 // ── History ───────────────────────────────────────────────────────────────────
 function HistoryTab({ lBase }) {
   const [contestantId, setContestantId] = useState('');
-  const [hours, setHours]               = useState('1');
-  const [data, setData]                 = useState(null);
-  const [err, setErr]                   = useState('');
-  const [loading, setLoading]           = useState(false);
+  const [hours, setHours] = useState('1');
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(false);
 
   async function fetchHistory(e) {
     e?.preventDefault(); if (!contestantId) return;
@@ -634,7 +649,7 @@ function HistoryTab({ lBase }) {
     finally { setLoading(false); }
   }
 
-  const COLS = ['Window','Orders','Correct%','p50µs','p90µs','p99µs','Avg µs','Min µs','Max µs'];
+  const COLS = ['Window', 'Orders', 'Correct%', 'p50µs', 'p90µs', 'p99µs', 'Avg µs', 'Min µs', 'Max µs'];
 
   return (
     <section>
@@ -664,27 +679,27 @@ function HistoryTab({ lBase }) {
       {data !== null && (data.length === 0
         ? <div className="card" style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>No history found for this contestant and time window.</div>
         : <div className="data-table-wrap">
-            <table className="data-table" aria-label="Performance history">
-              <thead><tr>{COLS.map(h => <th key={h}>{h}</th>)}</tr></thead>
-              <tbody>
-                {data.map((row, i) => (
-                  <tr key={i}>
-                    <td className="text-mono text-xs">{row.window_start ? new Date(row.window_start).toLocaleTimeString() : '—'}</td>
-                    <td className="text-bold">{row.count?.toLocaleString()}</td>
-                    <td style={{ color: row.correct_ratio >= 0.99 ? 'var(--accent-emerald)' : row.correct_ratio >= 0.95 ? 'var(--accent-amber)' : 'var(--accent-rose)' }}>
-                      {row.correct_ratio != null ? (row.correct_ratio * 100).toFixed(2) + '%' : '—'}
-                    </td>
-                    <td className="text-mono text-xs">{row.p50_us}</td>
-                    <td className="text-mono text-xs">{row.p90_us}</td>
-                    <td className="text-mono text-xs text-bold">{row.p99_us}</td>
-                    <td className="text-mono text-xs">{row.avg_us}</td>
-                    <td className="text-mono text-xs">{row.min_us}</td>
-                    <td className="text-mono text-xs">{row.max_us}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <table className="data-table" aria-label="Performance history">
+            <thead><tr>{COLS.map(h => <th key={h}>{h}</th>)}</tr></thead>
+            <tbody>
+              {data.map((row, i) => (
+                <tr key={i}>
+                  <td className="text-mono text-xs">{row.window_start ? new Date(row.window_start).toLocaleTimeString() : '—'}</td>
+                  <td className="text-bold">{row.count?.toLocaleString()}</td>
+                  <td style={{ color: row.correct_ratio >= 0.99 ? 'var(--accent-emerald)' : row.correct_ratio >= 0.95 ? 'var(--accent-amber)' : 'var(--accent-rose)' }}>
+                    {row.correct_ratio != null ? (row.correct_ratio * 100).toFixed(2) + '%' : '—'}
+                  </td>
+                  <td className="text-mono text-xs">{row.p50_us}</td>
+                  <td className="text-mono text-xs">{row.p90_us}</td>
+                  <td className="text-mono text-xs text-bold">{row.p99_us}</td>
+                  <td className="text-mono text-xs">{row.avg_us}</td>
+                  <td className="text-mono text-xs">{row.min_us}</td>
+                  <td className="text-mono text-xs">{row.max_us}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );
@@ -693,13 +708,13 @@ function HistoryTab({ lBase }) {
 // ── Contestants ───────────────────────────────────────────────────────────────
 function ContestantsTab({ jBase }) {
   const [contestants, setContestants] = useState(null);
-  const [err, setErr]                 = useState('');
+  const [err, setErr] = useState('');
   const [listLoading, setListLoading] = useState(false);
-  const [regId, setRegId]             = useState('');
-  const [regName, setRegName]         = useState('');
-  const [regResult, setRegResult]     = useState(null);
-  const [regErr, setRegErr]           = useState('');
-  const [regLoading, setRegLoading]   = useState(false);
+  const [regId, setRegId] = useState('');
+  const [regName, setRegName] = useState('');
+  const [regResult, setRegResult] = useState(null);
+  const [regErr, setRegErr] = useState('');
+  const [regLoading, setRegLoading] = useState(false);
 
   const loadContestants = useCallback(async () => {
     setErr(''); setListLoading(true);
@@ -743,7 +758,7 @@ function ContestantsTab({ jBase }) {
           </button>
         </form>
       </div>
-      {regErr    && <ErrorBox msg={regErr} />}
+      {regErr && <ErrorBox msg={regErr} />}
       {regResult && <SuccessBox>Registered: <strong>{regResult.display_name}</strong> <span className="text-mono text-xs text-muted">({regResult.id})</span></SuccessBox>}
 
       {/* Contestant list */}
@@ -757,26 +772,26 @@ function ContestantsTab({ jBase }) {
       {contestants !== null && (contestants.length === 0
         ? <div className="card" style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>No contestants registered yet.</div>
         : <div className="data-table-wrap">
-            <table className="data-table" aria-label="Contestants list">
-              <thead><tr>{['ID', 'Display Name', 'Registered At'].map(h => <th key={h}>{h}</th>)}</tr></thead>
-              <tbody>
-                {contestants.map((c, i) => (
-                  <tr key={c.id}>
-                    <td>
-                      <div className="contestant-col">
-                        <div className="contestant-avatar" style={{ background: `linear-gradient(135deg, ${PALETTE[i%PALETTE.length]}, ${PALETTE[(i+2)%PALETTE.length]})` }}>
-                          {(c.id || '?').slice(0,2).toUpperCase()}
-                        </div>
-                        <span className="text-mono text-sm">{c.id}</span>
+          <table className="data-table" aria-label="Contestants list">
+            <thead><tr>{['ID', 'Display Name', 'Registered At'].map(h => <th key={h}>{h}</th>)}</tr></thead>
+            <tbody>
+              {contestants.map((c, i) => (
+                <tr key={c.id}>
+                  <td>
+                    <div className="contestant-col">
+                      <div className="contestant-avatar" style={{ background: `linear-gradient(135deg, ${PALETTE[i % PALETTE.length]}, ${PALETTE[(i + 2) % PALETTE.length]})` }}>
+                        {(c.id || '?').slice(0, 2).toUpperCase()}
                       </div>
-                    </td>
-                    <td className="text-bold">{c.display_name}</td>
-                    <td className="text-mono text-xs text-muted">{c.registered_at ? new Date(c.registered_at).toLocaleString() : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      <span className="text-mono text-sm">{c.id}</span>
+                    </div>
+                  </td>
+                  <td className="text-bold">{c.display_name}</td>
+                  <td className="text-mono text-xs text-muted">{c.registered_at ? new Date(c.registered_at).toLocaleString() : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );

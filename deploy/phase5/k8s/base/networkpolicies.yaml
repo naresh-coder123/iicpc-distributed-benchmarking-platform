@@ -46,6 +46,16 @@ spec:
               app: bot-fleet
       ports:
         - port: 9092
+    # Kafka from judge-api in iicpc-runner namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-runner
+          podSelector:
+            matchLabels:
+              app: judge-api
+      ports:
+        - port: 9092
   egress:
     # Allow DNS
     - ports:
@@ -54,7 +64,7 @@ spec:
         - port: 53
           protocol: TCP
 ---
-# Redis: accept from telemetry-ingester and leaderboard-api (iicpc-frontend).
+# Redis: accept from telemetry-ingester, leaderboard-api (iicpc-frontend), and judge-api (iicpc-runner).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -83,6 +93,15 @@ spec:
               app: leaderboard-api
       ports:
         - port: 6379
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-runner
+          podSelector:
+            matchLabels:
+              app: judge-api
+      ports:
+        - port: 6379
   egress:
     - ports:
         - port: 53
@@ -90,7 +109,7 @@ spec:
         - port: 53
           protocol: TCP
 ---
-# TimescaleDB: accept only from telemetry-ingester.
+# TimescaleDB: accept from telemetry-ingester AND leaderboard-api (cross-namespace history/stats queries).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -108,6 +127,16 @@ spec:
         - podSelector:
             matchLabels:
               app: telemetry-ingester
+      ports:
+        - port: 5432
+    # Allow leaderboard-api from iicpc-frontend to query history/stats
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-frontend
+          podSelector:
+            matchLabels:
+              app: leaderboard-api
       ports:
         - port: 5432
   egress:
@@ -255,7 +284,8 @@ spec:
     - Ingress
     - Egress
 ---
-# Leaderboard-API: accept HTTP from anywhere (NodePort), egress to Redis and TimescaleDB.
+# Leaderboard-API: accept HTTP from anywhere (LoadBalancer).
+# Egress: Redis, TimescaleDB (same-namespace secret), and judge-api (reverse proxy).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -281,7 +311,7 @@ spec:
               app: redis
       ports:
         - port: 6379
-    # TimescaleDB — needed for /contestants/{id}/history and /runs/{id}/stats
+    # TimescaleDB — for /contestants/{id}/history and /runs/{id}/stats
     - to:
         - namespaceSelector:
             matchLabels:
@@ -291,14 +321,23 @@ spec:
               app: timescaledb
       ports:
         - port: 5432
+    # Reverse proxy to judge-api in iicpc-runner (ClusterIP, no public IP)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-runner
+          podSelector:
+            matchLabels:
+              app: judge-api
+      ports:
+        - port: 8081
     - ports:
         - port: 53
           protocol: UDP
         - port: 53
           protocol: TCP
 ---
-# Leaderboard-UI: accept HTTP from anywhere (NodePort), no backend egress needed
-# (Next.js SSR calls the API from the browser, not server-side in this setup).
+# Leaderboard-UI: accept HTTP from anywhere (LoadBalancer, port 80→3000).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -320,10 +359,10 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-
 ---
-# Judge-API: accept HTTP from anywhere (NodePort 30081), egress to Redis,
-# Redpanda, and the Docker socket (host network — not a pod-to-pod rule).
+# Judge-API: accept HTTP only from leaderboard-api (reverse proxy) — ClusterIP, no public ingress.
+# Egress: Redis and Redpanda in iicpc-telemetry.
+# NOTE: Docker socket egress removed — not available on AKS containerd nodes.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -337,7 +376,15 @@ spec:
     - Ingress
     - Egress
   ingress:
-    - ports:
+    # Only leaderboard-api may call judge-api (via /proxy/judge/* reverse proxy)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: iicpc-frontend
+          podSelector:
+            matchLabels:
+              app: leaderboard-api
+      ports:
         - port: 8081
   egress:
     # Redis in iicpc-telemetry
@@ -360,10 +407,6 @@ spec:
               app: redpanda
       ports:
         - port: 9092
-    # gRPC to contestant sandbox containers (host-bound on 50052)
-    # These run on the host network so we allow all egress on that port.
-    - ports:
-        - port: 50052
     # DNS
     - ports:
         - port: 53

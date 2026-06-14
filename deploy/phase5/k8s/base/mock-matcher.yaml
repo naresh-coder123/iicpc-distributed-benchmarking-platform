@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: mock-matcher
-          image: iicpc/mock-matcher-go:latest
+          image: iicpcregistery.azurecr.io/mock-matcher-go:latest
           imagePullPolicy: IfNotPresent
           args: ["--addr", "0.0.0.0:50051"]
           ports:

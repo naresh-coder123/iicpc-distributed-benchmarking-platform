@@ -15,6 +15,8 @@
 //	GET    /contestants/{id}/runs        List recent runs for a contestant
 //
 //	GET    /healthz                      Health check
+//	GET    /admin/queue                  Queue depth (accessible via proxy)
+//	GET    /admin/health                 Deep health check
 package main
 
 import (
@@ -27,6 +29,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -38,40 +42,53 @@ import (
 
 func main() {
 	var (
-		addr         = flag.String("addr", ":8081", "http listen addr")
-		redisAddr    = flag.String("redis", envOr("REDIS_ADDR", "localhost:6379"), "redis addr")
-		kafkaBrokers = flag.String("kafka", envOr("KAFKA_BROKERS", ""), "kafka brokers csv (optional)")
-		kafkaTopic   = flag.String("kafka-topic", envOr("KAFKA_TOPIC", "metrics"), "kafka topic")
-		sandboxPort  = flag.Int("sandbox-port", 50052, "host port for contestant sandbox containers")
-		botCount     = flag.Int("bots", 50, "bot fleet size")
-		botOps       = flag.Int("ops", 200, "orders/sec per bot")
-		botDuration  = flag.Int("duration", 60, "run duration in seconds")
-		sandboxMem   = flag.String("sandbox-mem", "512m", "sandbox memory limit")
-		sandboxCPUs  = flag.Int("sandbox-cpus", 1, "sandbox CPU limit (integer cores)")
-		sandboxPIDs  = flag.Int64("sandbox-pids", 50, "sandbox PID limit")
+		addr            = flag.String("addr", ":8081", "http listen addr")
+		redisAddr       = flag.String("redis", envOr("REDIS_ADDR", "localhost:6379"), "redis addr")
+		kafkaBrokers    = flag.String("kafka", envOr("KAFKA_BROKERS", ""), "kafka brokers csv (optional)")
+		kafkaTopic      = flag.String("kafka-topic", envOr("KAFKA_TOPIC", "metrics"), "kafka topic")
+		botCount        = flag.Int("bots", 50, "bot fleet size")
+		botOps          = flag.Int("ops", 200, "orders/sec per bot")
+		botDuration     = flag.Int("duration", 60, "run duration in seconds")
+		sandboxMem      = flag.String("sandbox-mem", "512m", "sandbox memory limit")
+		sandboxCPUs     = flag.Int("sandbox-cpus", 1, "sandbox CPU limit (integer cores)")
+		sandboxPIDs     = flag.Int64("sandbox-pids", 50, "sandbox PID limit")
+		allowedOrigins  = flag.String("allowed-origins", envOr("ALLOWED_ORIGINS", ""), "comma-separated CORS allowed origins (empty = wildcard for dev)")
 	)
 	flag.Parse()
+
+	originSet := buildOriginSet(*allowedOrigins)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	rdb := redis.NewClient(&redis.Options{Addr: *redisAddr})
+	// ── Redis (with connection pool) ─────────────────────────────────────────
+	rdb := redis.NewClient(&redis.Options{
+		Addr:            *redisAddr,
+		PoolSize:        10,
+		MinIdleConns:    2,
+		ConnMaxLifetime: 5 * time.Minute,
+		DialTimeout:     5 * time.Second,
+		ReadTimeout:     3 * time.Second,
+		WriteTimeout:    3 * time.Second,
+	})
 	defer rdb.Close()
 
 	reg := registry.New(rdb)
 
+	// sandbox-port removed from CLI flags — Docker socket not available on AKS.
+	// judge.New() will return nil on cloud nodes; API still serves registry endpoints.
 	judgeConfig := judge.Config{
-		SandboxMemory:  *sandboxMem,
-		SandboxCPUs:    *sandboxCPUs,
-		SandboxPIDs:    *sandboxPIDs,
-		SandboxPort:    *sandboxPort,
-		BotCount:       *botCount,
-		OrdersPerSec:   *botOps,
-		Duration:       time.Duration(*botDuration) * time.Second,
-		Symbol:         "AAPL",
-		KafkaBrokers:   kafkapub.BrokersFromCSV(*kafkaBrokers),
-		KafkaTopic:     *kafkaTopic,
-		RedisAddr:      *redisAddr,
+		SandboxMemory: *sandboxMem,
+		SandboxCPUs:   *sandboxCPUs,
+		SandboxPIDs:   *sandboxPIDs,
+		SandboxPort:   50052,
+		BotCount:      *botCount,
+		OrdersPerSec:  *botOps,
+		Duration:      time.Duration(*botDuration) * time.Second,
+		Symbol:        "AAPL",
+		KafkaBrokers:  kafkapub.BrokersFromCSV(*kafkaBrokers),
+		KafkaTopic:    *kafkaTopic,
+		RedisAddr:     *redisAddr,
 	}
 
 	eng, err := judge.New(judgeConfig, rdb)
@@ -81,7 +98,7 @@ func main() {
 		eng = nil
 	}
 
-	h := &handler{reg: reg, eng: eng, rdb: rdb}
+	h := &handler{reg: reg, eng: eng, rdb: rdb, originSet: originSet}
 	h.queue = make(chan judge.Submission, maxQueue)
 	go h.judgeWorker(ctx)
 
@@ -113,8 +130,11 @@ func main() {
 	mux.HandleFunc("GET /admin/health", h.deepHealth)
 
 	srv := &http.Server{
-		Addr:    *addr,
-		Handler: corsMiddleware(mux),
+		Addr:         *addr,
+		Handler:      panicRecovery(corsMiddleware(mux, originSet)),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {
@@ -122,9 +142,10 @@ func main() {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutCtx)
+		log.Println("judge_api shutdown complete")
 	}()
 
-	log.Printf("judge_api listening on %s (redis=%s)", *addr, *redisAddr)
+	log.Printf("judge_api listening on %s (redis=%s docker=%v)", *addr, *redisAddr, eng != nil)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("server error: %v", err)
 	}
@@ -132,12 +153,13 @@ func main() {
 
 // handler holds shared dependencies for all HTTP handlers.
 type handler struct {
-	reg     *registry.Registry
-	eng     *judge.Engine // may be nil if Docker is unavailable
-	rdb     *redis.Client
-	queue   chan judge.Submission // buffered, capacity = maxQueue
-	pending atomic.Int64
-	running atomic.Int64
+	reg       *registry.Registry
+	eng       *judge.Engine // may be nil if Docker is unavailable (cloud mode)
+	rdb       *redis.Client
+	queue     chan judge.Submission // buffered, capacity = maxQueue
+	pending   atomic.Int64
+	running   atomic.Int64
+	originSet map[string]struct{}
 }
 
 const maxQueue = 20
@@ -238,7 +260,7 @@ func (h *handler) createSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enqueue for judging.
+	// Enqueue for judging (if engine available).
 	if h.eng != nil {
 		select {
 		case h.queue <- sub:
@@ -248,7 +270,7 @@ func (h *handler) createSubmission(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		log.Printf("judge engine unavailable; submission %s saved but not judged", sub.ID)
+		log.Printf("judge engine unavailable; submission %s saved but not judged (cloud mode)", sub.ID)
 	}
 
 	jsonResp(w, http.StatusAccepted, sub)
@@ -327,12 +349,10 @@ func (h *handler) listRuns(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) resetLeaderboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	// Delete the sorted set.
 	if err := h.rdb.Del(ctx, "leaderboard").Err(); err != nil {
 		httpErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Delete all leaderboard:* hash keys.
 	var cursor uint64
 	for {
 		keys, next, err := h.rdb.Scan(ctx, cursor, "leaderboard:*", 100).Result()
@@ -391,14 +411,12 @@ func (h *handler) deepHealth(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	result := map[string]string{}
 
-	// Redis ping.
 	if err := h.rdb.Ping(ctx).Err(); err != nil {
 		result["redis"] = "error: " + err.Error()
 	} else {
 		result["redis"] = "ok"
 	}
 
-	// Docker ping (via judge engine).
 	if h.eng != nil {
 		pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
@@ -408,16 +426,71 @@ func (h *handler) deepHealth(w http.ResponseWriter, r *http.Request) {
 			result["docker"] = "ok"
 		}
 	} else {
-		result["docker"] = "unavailable"
+		result["docker"] = "unavailable (cloud mode — AKS containerd, no docker socket)"
 	}
 
-	if result["redis"] == "ok" && (result["docker"] == "ok" || result["docker"] == "unavailable") {
+	if result["redis"] == "ok" {
 		result["status"] = "ok"
 	} else {
 		result["status"] = "degraded"
 	}
 
 	jsonResp(w, http.StatusOK, result)
+}
+
+// ── CORS + middleware ─────────────────────────────────────────────────────────
+
+// buildOriginSet parses a comma-separated list of allowed origins into a set.
+func buildOriginSet(csv string) map[string]struct{} {
+	csv = strings.TrimSpace(csv)
+	if csv == "" {
+		return nil
+	}
+	set := make(map[string]struct{})
+	for _, o := range strings.Split(csv, ",") {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			set[o] = struct{}{}
+		}
+	}
+	return set
+}
+
+// corsMiddleware wraps next with CORS headers.
+// If originSet is nil, falls back to wildcard "*" (dev/local mode).
+func corsMiddleware(next http.Handler, originSet map[string]struct{}) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if originSet == nil {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if _, ok := originSet[origin]; ok {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// panicRecovery wraps next with a defer/recover that catches any panics,
+// logs the stack trace, and returns a clean JSON 500 to the client.
+func panicRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("panic recovered in %s %s: %v\n%s", r.Method, r.URL.Path, rec, debug.Stack())
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"})
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -432,19 +505,6 @@ func httpErr(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
-}
-
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func envOr(k, def string) string {

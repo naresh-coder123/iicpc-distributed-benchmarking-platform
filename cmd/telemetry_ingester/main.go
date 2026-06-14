@@ -4,11 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"time"
 
-	"github.com/iicpc/platform/gen/go/iicpc/telemetry"
+	telemetrypb "github.com/iicpc/platform/gen/go/iicpc/telemetry"
 	"github.com/iicpc/platform/internal/ingest"
 	"github.com/iicpc/platform/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,7 +31,10 @@ func main() {
 		window = flag.Duration("window", 1*time.Second, "aggregation window")
 		topN   = flag.Int("top", 50, "leaderboard size (top N)")
 
-		// Scoring parameters (checklist §5).
+		// Worker pool size for concurrent Kafka message decoding.
+		workers = flag.Int("workers", 4, "number of concurrent kafka consumer workers")
+
+		// Scoring parameters.
 		scoreLambda  = flag.Float64("score-lambda", ingest.DefaultLambda, "latency decay rate λ")
 		scoreLTarget = flag.Float64("score-ltarget", ingest.DefaultLTarget, "target latency µs for S_L")
 		scoreTTarget = flag.Float64("score-ttarget", ingest.DefaultTTarget, "target TPS for S_T")
@@ -39,10 +44,30 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	rdb := redis.NewClient(&redis.Options{Addr: *redisAddr})
+	// ── Redis (with connection pool) ─────────────────────────────────────────
+	rdb := redis.NewClient(&redis.Options{
+		Addr:            *redisAddr,
+		PoolSize:        10,
+		MinIdleConns:    2,
+		ConnMaxLifetime: 5 * time.Minute,
+		DialTimeout:     5 * time.Second,
+		ReadTimeout:     3 * time.Second,
+		WriteTimeout:    3 * time.Second,
+	})
 	defer rdb.Close()
 
-	pool, err := pgxpool.New(ctx, *pgURL)
+	// ── TimescaleDB (with connection pool) ───────────────────────────────────
+	pgCfg, err := pgxpool.ParseConfig(*pgURL)
+	if err != nil {
+		fmt.Printf("pg config error: %v\n", err)
+		os.Exit(1)
+	}
+	pgCfg.MaxConns = 10
+	pgCfg.MinConns = 2
+	pgCfg.MaxConnLifetime = 10 * time.Minute
+	pgCfg.MaxConnIdleTime = 5 * time.Minute
+
+	pool, err := pgxpool.NewWithConfig(ctx, pgCfg)
 	if err != nil {
 		fmt.Printf("pg connect error: %v\n", err)
 		os.Exit(1)
@@ -50,12 +75,18 @@ func main() {
 	defer pool.Close()
 	ts := store.NewTimescale(pool)
 
+	// ── Kafka reader (batch-optimised config) ─────────────────────────────────
+	// MinBytes=10KB + MaxWait=500ms lets Redpanda batch server-side before push.
+	// This dramatically reduces per-message round trips under high throughput.
 	reader := kafkago.NewReader(kafkago.ReaderConfig{
-		Brokers:  splitCSV(*kafkaBrokers),
-		Topic:    *kafkaTopic,
-		GroupID:  *groupID,
-		MinBytes: 1,
-		MaxBytes: 10e6,
+		Brokers:        splitCSV(*kafkaBrokers),
+		Topic:          *kafkaTopic,
+		GroupID:        *groupID,
+		MinBytes:       10e3,         // 10 KB
+		MaxBytes:       10e6,         // 10 MB
+		MaxWait:        500 * time.Millisecond,
+		CommitInterval: 0,            // manual commit for reliability
+		StartOffset:    kafkago.LastOffset,
 	})
 	defer reader.Close()
 
@@ -65,38 +96,87 @@ func main() {
 		TTarget: *scoreTTarget,
 	})
 
+	// ── Concurrent worker pool ────────────────────────────────────────────────
+	// Workers: fetch → decode → push to aggregator channel
+	// Collector: drains channel, accumulates batch, flushes on tick or cap
+	type decoded struct {
+		rec *telemetrypb.MetricRecord
+		msg kafkago.Message
+	}
+
+	msgCh := make(chan decoded, 4096) // buffered channel between workers and collector
+
+	// Launch N worker goroutines that fetch and decode messages concurrently.
+	var wg sync.WaitGroup
+	for i := 0; i < *workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				msg, err := reader.FetchMessage(ctx)
+				if err != nil {
+					if ctx.Err() != nil {
+						return // context cancelled — graceful shutdown
+					}
+					log.Printf("kafka fetch error: %v — retrying in 250ms", err)
+					time.Sleep(250 * time.Millisecond)
+					continue
+				}
+
+				var rec telemetrypb.MetricRecord
+				if err := proto.Unmarshal(msg.Value, &rec); err != nil {
+					// Commit bad messages so we don't get stuck.
+					_ = reader.CommitMessages(ctx, msg)
+					continue
+				}
+
+				select {
+				case msgCh <- decoded{rec: &rec, msg: msg}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	// ── Collector goroutine ───────────────────────────────────────────────────
+	// Single-threaded collector for the aggregator (no lock contention).
+	pendingCap := 200_000
+	var pending []*telemetrypb.MetricRecord
+	var toCommit []kafkago.Message
+
 	ticker := time.NewTicker(*window)
 	defer ticker.Stop()
 
-	// Pending raw records for Timescale insert.
-	var pending []*telemetry.MetricRecord
-	pendingCap := 200_000
-
-	fmt.Printf("telemetry_ingester started: kafka=%s topic=%s redis=%s pg=%s\n", *kafkaBrokers, *kafkaTopic, *redisAddr, *pgURL)
+	log.Printf("telemetry_ingester started: kafka=%s topic=%s workers=%d redis=%s pg=%s",
+		*kafkaBrokers, *kafkaTopic, *workers, *redisAddr, *pgURL)
 
 	for {
 		select {
 		case <-ctx.Done():
-			flush(ctx, agg, rdb, ts, pending, *window, *topN)
-			fmt.Println("telemetry_ingester stopped")
+			// Final flush before shutdown.
+			if len(toCommit) > 0 {
+				_ = reader.CommitMessages(ctx, toCommit...)
+			}
+			flush(context.Background(), agg, rdb, ts, pending, *window, *topN)
+			log.Println("telemetry_ingester stopped")
+			// Wait for worker goroutines to exit.
+			wg.Wait()
 			return
-		case <-ticker.C:
-			pending = flush(ctx, agg, rdb, ts, pending, *window, *topN)
-		default:
-			msg, err := reader.ReadMessage(ctx)
-			if err != nil {
-				if ctx.Err() != nil {
-					continue
-				}
-				fmt.Printf("kafka read error: %v\n", err)
-				time.Sleep(250 * time.Millisecond)
-				continue
-			}
 
-			var rec telemetry.MetricRecord
-			if err := proto.Unmarshal(msg.Value, &rec); err != nil {
-				continue
+		case <-ticker.C:
+			// Commit consumed offsets as a batch.
+			if len(toCommit) > 0 {
+				if err := reader.CommitMessages(ctx, toCommit...); err != nil {
+					log.Printf("kafka commit error: %v", err)
+				}
+				toCommit = toCommit[:0]
 			}
+			pending = flush(ctx, agg, rdb, ts, pending, *window, *topN)
+
+		case d := <-msgCh:
+			rec := d.rec
+			toCommit = append(toCommit, d.msg)
 
 			latUs := uint64(1)
 			if rec.RecvTimeNs >= rec.SentTimeNs {
@@ -107,26 +187,32 @@ func main() {
 			}
 
 			agg.Add(rec.ContestantId, latUs, rec.IsCorrect)
+			pending = append(pending, rec)
 
-			// keep raw for DB
-			pending = append(pending, &rec)
+			// Early flush if batch is full.
 			if len(pending) >= pendingCap {
-				// best-effort backpressure: flush early
+				if len(toCommit) > 0 {
+					if err := reader.CommitMessages(ctx, toCommit...); err != nil {
+						log.Printf("kafka commit error: %v", err)
+					}
+					toCommit = toCommit[:0]
+				}
 				pending = flush(ctx, agg, rdb, ts, pending, *window, *topN)
 			}
 		}
 	}
 }
 
+// flush drains aggregated windows to Redis and raw records to TimescaleDB.
 func flush(
 	ctx context.Context,
 	agg *ingest.Aggregator,
 	rdb *redis.Client,
 	ts *store.Timescale,
-	pending []*telemetry.MetricRecord,
+	pending []*telemetrypb.MetricRecord,
 	window time.Duration,
 	topN int,
-) []*telemetry.MetricRecord {
+) []*telemetrypb.MetricRecord {
 	// Flush aggregates to Redis leaderboard.
 	windows := agg.FlushAndReset(window)
 	if len(windows) > 0 {
@@ -136,21 +222,24 @@ func flush(
 			pipe.Set(ctx, "leaderboard:"+w.ContestantID, w.JSON(), 0)
 			pipe.Publish(ctx, "leaderboard_updates", w.ContestantID)
 		}
-		_, _ = pipe.Exec(ctx)
+		if _, err := pipe.Exec(ctx); err != nil {
+			log.Printf("redis pipeline error: %v", err)
+		}
 
-		// Optionally trim to top N.
+		// Trim to top N.
 		if topN > 0 {
 			card, err := rdb.ZCard(ctx, "leaderboard").Result()
 			if err == nil && card > int64(topN) {
-				// Remove the lowest-ranked entries, keep only topN highest scores.
 				_ = rdb.ZRemRangeByRank(ctx, "leaderboard", 0, card-int64(topN)-1).Err()
 			}
 		}
 	}
 
-	// Flush raw metrics to Timescale.
+	// Batch-insert raw metrics into TimescaleDB.
 	if len(pending) > 0 {
-		_ = ts.InsertBatch(ctx, pending) // best-effort MVP
+		if err := ts.InsertBatch(ctx, pending); err != nil {
+			log.Printf("timescaledb insert error (batch of %d): %v", len(pending), err)
+		}
 	}
 
 	return pending[:0]

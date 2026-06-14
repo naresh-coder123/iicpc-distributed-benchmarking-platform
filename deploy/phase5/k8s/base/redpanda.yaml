@@ -30,6 +30,11 @@ spec:
       labels:
         app: redpanda
     spec:
+      # 🚀 PERMISSION FIX: Automatically chowns the Azure volume mount path to the redpanda user
+      securityContext:
+        fsGroup: 101
+        runAsUser: 101
+        runAsGroup: 101
       containers:
         - name: redpanda
           image: redpandadata/redpanda:v24.3.8
@@ -40,7 +45,7 @@ spec:
             - --smp
             - "1"
             - --memory
-            - "1G"
+            - "768M"          # 🚀 LOWERED: This leaves breathing room below the k8s limit!
             - --reserve-memory
             - "0M"
             - --node-id
@@ -66,7 +71,7 @@ spec:
               memory: 512Mi
             limits:
               cpu: "1"
-              memory: 1Gi
+              memory: 1Gi       # ✅ Keeps a safe overhead threshold margin
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -75,4 +80,3 @@ spec:
         resources:
           requests:
             storage: 2Gi
-

@@ -41,3 +41,8 @@ frontend/leaderboard-ui/out/
 .idea/
 *.swp
 *.swo
+
+# ── Secrets and temp files ────────────────────────────────────────────────────
+temp_secret.yaml
+*secret*.yaml
+*.secret.yaml

@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: leaderboard-ui
-          image: iicpc/leaderboard-ui:latest
-          imagePullPolicy: IfNotPresent
+          image: iicpcregistery.azurecr.io/leaderboard-ui:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 3000
           resources:
@@ -33,12 +33,10 @@ metadata:
   name: leaderboard-ui
   namespace: iicpc-frontend
 spec:
-  type: NodePort
+  type: LoadBalancer  # 🚀 CHANGED from NodePort
   selector:
     app: leaderboard-ui
   ports:
     - name: http
-      port: 3000
+      port: 80        # 🌐 Change port to 80 so you can just type the IP in your browser without adding :3000
       targetPort: 3000
-      nodePort: 30090
-

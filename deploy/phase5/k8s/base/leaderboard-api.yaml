@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: leaderboard-api
-          image: iicpc/leaderboard-api:latest
+          image: iicpcregistery.azurecr.io/leaderboard-api:latest
           imagePullPolicy: IfNotPresent
           args:
             - --addr
@@ -28,6 +28,15 @@ spec:
                 secretKeyRef:
                   name: timescaledb-credentials
                   key: PG_URL
+            # Internal cluster DNS address of judge-api (no Public IP needed).
+            - name: JUDGE_INTERNAL_URL
+              value: "http://judge-api.iicpc-runner.svc.cluster.local:8081"
+            # Comma-separated list of allowed CORS origins.
+            # ⚠️  After first deploy, run:
+            #   kubectl get svc leaderboard-ui -n iicpc-frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+            # Then update this value and re-apply.
+            - name: ALLOWED_ORIGINS
+              value: ""  # e.g. "http://20.10.x.x" — leave empty for wildcard fallback during initial deploy
           ports:
             - containerPort: 8080
           resources:
@@ -44,12 +53,20 @@ metadata:
   name: leaderboard-api
   namespace: iicpc-frontend
 spec:
-  type: NodePort
+  type: LoadBalancer  # Public IP #2 (UI is #1, master is #0 of the 3-IP budget)
   selector:
     app: leaderboard-api
   ports:
     - name: http
       port: 8080
       targetPort: 8080
-      nodePort: 30080
-
+---
+# Shared ConfigMap for cross-namespace UI origin value.
+# Update LEADERBOARD_UI_ORIGIN after you know the LoadBalancer IP of leaderboard-ui.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+  namespace: iicpc-runner
+data:
+  LEADERBOARD_UI_ORIGIN: ""  # e.g. "http://20.10.x.x"

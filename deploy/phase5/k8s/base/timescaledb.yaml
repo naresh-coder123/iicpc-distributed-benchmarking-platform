@@ -55,12 +55,20 @@ spec:
       labels:
         app: timescaledb
     spec:
+      # 🚀 PERMISSION FIX: Fixes Azure storage disk ownership boundaries
+      securityContext:
+        fsGroup: 70
+        runAsUser: 70
+        runAsGroup: 70
       containers:
         - name: timescaledb
           image: timescale/timescaledb:2.15.3-pg16
           ports:
             - containerPort: 5432
           env:
+            # 🚀 LOST+FOUND FIX: Forces initialization inside an empty subfolder
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -100,4 +108,3 @@ spec:
         resources:
           requests:
             storage: 2Gi
-
