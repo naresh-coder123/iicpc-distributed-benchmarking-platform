@@ -1,5 +1,7 @@
 # IICPC Distributed Benchmarking Platform
 
+## access leaderboard on http://20.235.207.237
+
 An automated, isolated benchmarking platform for competitive trading engine evaluation. Contestants submit matching engine Docker images; the platform runs stress tests via a bot fleet, gathers telemetry via Kafka/Redpanda, stores time-series metrics in TimescaleDB, and tracks rankings on a live Redis-powered leaderboard.
 
 ---
